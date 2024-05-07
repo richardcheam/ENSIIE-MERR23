@@ -1,0 +1,1400 @@
+---
+title: "projet"
+author: "Richard CHEAM"
+date: "2023-11-20"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(corrplot)
+library(FactoMineR)
+library(factoextra)
+library(ggfortify)
+library(ggpubr)
+library(glmnet)
+library(dplyr)
+library(pROC)
+library(ROCR)
+library(MASS)
+library(class)
+library(caret)
+set.seed(123)
+rm(list=ls())
+graphics.off()
+```
+
+```{r}
+GETaccuracy <- function(Y, Y_hat){
+  acc = mean(Y == Y_hat)
+  return (acc)
+}
+```
+
+
+```{r}
+logistic_performance <- function(Y_hat, Y){
+  
+  #initialize confusion matrix
+  confusion_matrix = table(Predicted = Y_hat, Observed = Y)
+  cat("Confusion matrix:\n\n")
+  print(confusion_matrix)
+  cat("\n")
+  
+  #initialize the components to measure the quality of the model from matrix
+  TN <- confusion_matrix[1,1]
+  TP <- confusion_matrix[2,2]
+  FN <- confusion_matrix[1,2]
+  FP <- confusion_matrix[2,1]
+  TOTAL <- TN + TP + FN + FP
+  
+  #find accuracy, error_rate,...,FNR, of the model
+  accuracy <- (TP + TN)/TOTAL
+  error_rate <- (FP + FN)/TOTAL
+  recall <- TP/(FN + TP)
+  specificity <- TN/(TN + FP)
+  precision <- TP/(FP + TP)
+  FPR <- FP/(TN + FP)
+  FNR <- FN/(FN + TP)
+  
+  #display those values 
+  cat("accuracy:", accuracy*100, "%", "\n")
+  cat("Error rate: ", error_rate*100, "%", "\n")
+  cat("Recall: ", recall*100, "%", "\n")
+  cat("Specificity: ", specificity*100, "%", "\n")
+  cat("Precision: ", precision*100, "%", "\n")
+  cat("False positive rate:", FPR*100, "%", "\n")
+  cat("False negative rate:", FNR*100, "%", "\n")
+  
+  #return a list containing all the values for accessibility
+  return(list(accuracy=accuracy, error_rate=error_rate, recall=recall, 
+              specificity=specificity, precision=precision, FPR=FPR, FNR=FNR))
+}
+```
+
+```{r}
+#read data and change categorical to numerical
+df <- read.csv("data.csv", header = TRUE, sep = ",")
+df$Class <- ifelse(df$Class == "Toxic", 1, 0) #toxic = 1, non = 0
+df
+#separate X and Y
+Y <- df$Class
+X <- subset(df, select = -Class)
+#X <- as.matrix(scale(X))
+dim(df)
+```
+
+# Divide group
+
+```{r}
+#divide group
+toxic <- df[which(Y == 1),]
+non_toxic <- df[which(Y == 0),]
+X_tox <- subset(toxic, select = -Class)
+X_n_tox <- subset(non_toxic, select = -Class)
+#X_tox <- as.matrix(scale(X_tox))
+#X_n_tox <- as.matrix(scale(X_n_tox))
+dim(toxic) #67.25% 
+dim(non_toxic) #32.75%
+```
+
+# Student t-test
+
+```{r}
+mean_tox <- apply(X_tox, 2, mean)
+mean_n_tox <- apply(X_n_tox, 2, mean)
+var_tox <- apply(X_tox, 2, var)
+var_n_tox <- apply(X_n_tox, 2, var)
+
+t = abs(mean_tox - mean_n_tox)/sqrt( (var_tox/nrow(X_tox)) + (var_n_tox/nrow(X_n_tox)) )
+degree = nrow(toxic) + nrow(non_toxic) - 2
+# Two-sided test, calculate p-value
+p_values = 2 * pt(-t, df = degree)
+
+# Display the p-value
+#data.frame(p_values)
+```
+
+```{r}
+# how many selected 
+length(p_values[which(p_values < 0.003)]) #probab making type I error
+
+# selected variables
+selected_p_values <- p_values[which(p_values<0.003)]
+selected_variables_1 <- names(selected_p_values)
+selected_variables_1
+```
+
+```{r}
+# how many selected 
+length(p_values[which(p_values < 0.005)]) #probab making type I error
+
+# selected variables
+selected_p_values <- p_values[which(p_values<0.005)]
+selected_variables_2 <- names(selected_p_values)
+selected_variables_2
+```
+
+```{r}
+# how many selected 
+length(p_values[which(p_values < 0.01)]) #probab making type I error
+
+# selected variables
+selected_p_values <- p_values[which(p_values<0.01)]
+selected_variables_3 <- names(selected_p_values)
+selected_variables_3
+```
+
+
+```{r}
+# how many selected 
+length(p_values[which(p_values < 0.05)]) #probab making type I error
+
+# selected variables
+selected_p_values <- p_values[which(p_values<0.05)]
+selected_variables_37 <- names(selected_p_values)
+selected_variables_37
+```
+
+```{r}
+# how many selected 
+length(p_values[which(p_values < 0.1)]) #probab making type I error
+
+# selected variables
+selected_p_values <- p_values[which(p_values<0.1)]
+selected_variables_138 <- names(selected_p_values)
+selected_variables_138
+```
+
+# Handle Collinearity 
+
+## Find correlation matrix
+```{r}
+corr_matrix <- cor(df)
+corr_matrix_2 <- cor(df[,c(selected_variables_2,'Class')])
+corr_matrix_3 <- cor(df[,c(selected_variables_3,'Class')])
+corr_matrix_37 <- cor(df[,c(selected_variables_37,'Class')])
+corr_matrix_138 <- cor(df[,c(selected_variables_138,'Class')])
+```
+
+## Highly correlated X(s)
+
+```{r}
+threshold = 0.8 #for a really strong correlation between variables
+length(corr_matrix) #matrix 1204x1204
+length(which(abs(corr_matrix) > threshold & corr_matrix != 1, arr.ind = TRUE))
+#44976/2 variables that are highly correlated to each other
+```
+
+```{r}
+corr_matrix_2
+```
+```{r}
+corr_matrix_3
+which(abs(corr_matrix_3) > 0.6 & corr_matrix_3 != 1, arr.ind = TRUE)
+length(which(abs(corr_matrix_3) > 0.6 & corr_matrix_3 != 1, arr.ind = TRUE))
+```
+```{r}
+length(corr_matrix_37) #38x38
+length(which(abs(corr_matrix_37) > threshold & corr_matrix_37 != 1, arr.ind = TRUE)) #196/2 variables that are highly correlated to each other
+```
+
+```{r}
+length(corr_matrix_138) #139x139
+length(which(abs(corr_matrix_138) > threshold & corr_matrix_138 != 1, arr.ind = TRUE)) #3996/2 variables that are highly correlated to each other
+```
+
+## Remove highly correlated
+
+```{r}
+# Find highly correlated variable pairs excluding those in selected_variables
+highly_correlated_pairs <- which(abs(corr_matrix) > threshold & corr_matrix != 1 & rownames(corr_matrix) %in% selected_variables_138 & colnames(corr_matrix) %in% selected_variables_138, arr.ind = TRUE)
+```
+
+```{r}
+# Assuming your dataset is named 'my_data'
+all_variable_names <- colnames(df)
+
+# Extract variable names for the highly correlated pairs
+correlated_variable_names <- all_variable_names[c(highly_correlated_pairs[, "row"], highly_correlated_pairs[, "col"])]
+correlated_variable_names <- unique(correlated_variable_names)
+```
+
+```{r}
+reduced_data <- df[,c(correlated_variable_names,'Class')]
+head(reduced_data)
+```
+
+# Split data
+
+```{r}
+reduced_data[,-391] <- scale(reduced_data[,-391])
+validationIndex <- createDataPartition(reduced_data$Class, p=0.70, list=FALSE)
+train <- reduced_data[validationIndex,] # 70% of data to training
+test <- reduced_data[-validationIndex,]
+
+X_train <- train[,-391]
+Y_train <- train$Class
+
+X_test <- test[,-391]
+Y_test <- test$Class
+```
+
+# Fit model, methodology 
+
+* First we fit model on the given data, but we split the data in 80% for calibrated model, and 20% for testing.
+
+## Linear 
+
+* Since p >> n
+
+```{r}
+reg <- lm(Class~., data = train)
+Yhat_linear <- predict(reg, newdata = test)
+GETaccuracy(Y_test, Yhat_linear)
+```
+
+## Logit
+
+```{r}
+#algo did not converge, standard error is too big
+#modLogit <- glm(Class~.-1, family = binomial, data = train) #without intercept
+modLogit <- glm(Class~., family = binomial, data = train)
+probs_logit <- predict.glm(modLogit, type = "response", newdata = test)
+summary(modLogit)
+
+```
+
+### ROC 
+```{r}
+par(pty = "s")
+roc(Y_train, modLogit$fitted.values, plot = TRUE, legacy.axes = TRUE, xlab = "False Positive Rate", ylab = "True Positive Rate", col = "cadetblue", lwd = 4, main = "ROC Curve of Full Logistic")
+roc_info <- roc(Y_train, modLogit$fitted.values, legacy.axes = TRUE)
+roc_df <- data.frame(tpr = roc_info$sensitivities*100, fpr = (1-roc_info$specificities)*100, thresholds = roc_info$thresholds)
+roc_df
+```
+
+```{r}
+Yhat_logit <- ifelse(probs_logit > 0.5, 1, 0)
+logistic_performance(Yhat_logit, Y_test)
+```
+
+```{r}
+#algo from prof
+
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(reduced_data))
+
+#assign a new tab equal to random order of features_data
+tab = reduced_data[ind,]
+
+#initialize number of folds
+k = 10
+
+#num of obs in order to find each block
+n = nrow(reduced_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+# initialize the total performance metrics of all folds
+tot_accuracy = 0;
+tot_error = 0;
+tot_recall = 0;
+tot_specificity = 0;
+tot_precision = 0;
+tot_fpr = 0;
+tot_fnr = 0;
+
+#k-fold procedure
+for (i in 1:k){
+  
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6 
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #train generalized linear model
+  modTrain = glm(Class~., family = "binomial", data = tabTrain)
+  
+  #prediction and decision step for logistic regression
+  Y_hat = predict.glm(modTrain, type = "response", newdata = tabTest)
+  Y_hat = ifelse(Y_hat > 0.5, 1, 0)
+  
+  #print performance for i-fold
+  performance = logistic_performance(Y_hat, tabTest$Class)
+  cat("\n")
+  
+  #calculate total of the performance metrics for each fold
+  tot_accuracy = tot_accuracy + performance$accuracy;
+  tot_error = tot_error + performance$error_rate;
+  tot_recall = tot_recall + performance$recall;
+  tot_specificity = tot_specificity + performance$specificity;
+  tot_precision = tot_precision + performance$precision;
+  tot_fpr = tot_fpr + performance$FPR;
+  tot_fnr = tot_fnr + performance$FNR;
+}
+
+#calculate average of the performance
+avg_accuracy = (tot_accuracy / k)
+avg_error = (tot_error / k)
+avg_recall = (tot_recall / k)
+avg_specificity = (tot_specificity / k)
+avg_precision = (tot_precision / k)
+avg_fpr = (tot_fpr / k)
+avg_fnr = (tot_fnr / k)
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+#print all metrics, average performance of the k-fold cross validation
+cat("Average accuracy:", avg_accuracy*100, "%", "\n")
+cat("Average error rate: ", avg_error*100, "%", "\n")
+cat("Average recall: ", avg_recall*100, "%", "\n")
+cat("Average specificity: ", avg_specificity*100, "%", "\n")
+cat("Average precision: ", avg_precision*100, "%", "\n")
+cat("Average false positive rate:", avg_fpr*100, "%", "\n")
+cat("Average false negative rate:", avg_fnr*100, "%", "\n")
+
+#save average performance values to a list for comparison
+logit_avg_perf <- list(average_accuracy = avg_accuracy, 
+                       average_error = avg_error, 
+                       average_recall = avg_recall, 
+                       average_specificity = avg_specificity, 
+                       average_precision = avg_precision, 
+                       average_fpr = avg_fpr, 
+                       average_fnr = avg_fnr)
+```
+
+
+## Ridge 
+
+```{r}
+grid <- 10^seq(10, -2, length = 100)
+MAP_threshold <- 0.5
+dim(X_train)
+dim(X_test)
+```
+
+```{r}
+ridge <- list(ridgeMin = c(), ridge1se = c(), accuracy_ridgeMin = c(), accuracy_ridge1se = c())
+for (i in 1:10){
+  cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial")
+  ridge$ridgeMin[i] <- cv_ridge$lambda.min 
+  ridge$ridge1se[i] <- cv_ridge$lambda.1se
+  
+  modRidgeMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge$ridgeMin[i], family = "binomial")
+  modRidge1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge$ridge1se[i], family = "binomial")
+  
+  probs_ridgeMin <- predict(modRidgeMin, s = ridge$ridgeMin[i], newx = as.matrix(X_test), type = "response")
+  probs_ridge1se <- predict(modRidge1se, s = ridge$ridge1se[i], newx = as.matrix(X_test), type = "response")
+  
+  Yhat_ridgeMin <- ifelse(probs_ridgeMin > 0.4217271, 1, 0)
+  Yhat_ridge1se <- ifelse(probs_ridge1se > 0.4216677, 1, 0)
+  
+  ridge$accuracy_ridgeMin[i] <- GETaccuracy(Y_test, Yhat_ridgeMin)
+  ridge$accuracy_ridge1se[i] <- GETaccuracy(Y_test, Yhat_ridge1se)
+}
+ridge
+```
+
+```{r}
+cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial")
+ridgeMin <- cv_ridge$lambda.min 
+ridge1se <- cv_ridge$lambda.1se
+ridgeMin
+ridge1se
+```
+
+```{r}
+modRidgeMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridgeMin, family = "binomial")
+modRidge1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge1se, family = "binomial")
+```
+
+```{r}
+probs_ridgeMin <- predict(modRidgeMin, s = ridgeMin, newx = as.matrix(X_test), type = "response")
+probs_ridge1se <- predict(modRidge1se, s = ridge1se, newx = as.matrix(X_test), type = "response")
+```
+
+```{r}
+#print sorted from smallest to biggest all the coeff
+coef_RidgeMin <- coef(modRidgeMin)
+rownames(coef_RidgeMin)[order(coef_RidgeMin)]
+```
+```{r}
+selected_variables_37
+```
+
+### ROC 
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_ridgeMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "red", lwd = 4, main = "ROC Curve of Ridge")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_ridge1se, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "red", lwd = 4, main = "ROC Curve of Ridge1se")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_ridgeMin <- ifelse(probs_ridgeMin > 0.2415346, 1, 0)
+#Yhat_ridge1se <- ifelse(probs_ridge1se > 0.4217271, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_ridgeMin, observed = Y_test)
+#table(predicted = Yhat_ridge1se, observed = Y_test)
+ridgeMin_acc = mean(Yhat_ridgeMin == Y_test)
+ridgeMin_err = 1 - ridgeMin_acc
+#ridge1se_acc = mean(Yhat_ridge1se == Y_test)
+#ridge1se_err = 1 - ridge1se_acc
+ridgeMin_acc
+ridgeMin_err
+#ridge1se_acc
+#ridge1se_err
+```
+
+```{r}
+logistic_performance(Yhat_ridgeMin, Y_test)
+#logistic_performance(Yhat_ridge1se, Y_test)
+```
+
+```{r}
+GETaccuracy(Y_test, Yhat_ridgeMin)
+GETaccuracy(Y_test, Yhat_ridge1se)
+```
+
+
+## Lasso
+
+```{r}
+lasso <- list(lassoMin = c(), lasso1se = c(), coef_lassoMin = list(names = list(), values = list(), counts = c()), coef_lasso1se = list(names = list(), values = list(), counts = c()), accuracy_lassoMin = c(), accuracy_lasso1se = c())
+for (i in 1:10){
+  cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial")
+  lasso$lassoMin[i] <- cv_lasso$lambda.min 
+  lasso$lasso1se[i] <- cv_lasso$lambda.1se
+  
+  modLassoMin <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso$lassoMin[i], family = "binomial")
+  modLasso1se <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso$lasso1se[i], family = "binomial")
+  
+  lasso$coef_lassoMin$names[[i]] <- rownames(coef(modLassoMin))[which(coef(modLassoMin)[, "s0"] != 0)]
+  lasso$coef_lassoMin$values[[i]] <- as.numeric(coef(modLassoMin))
+  lasso$coef_lassoMin$values[[i]] <- lasso$coef_lassoMin$values[[i]][lasso$coef_lassoMin$values[[i]] != 0]
+  lasso$coef_lassoMin$counts[i] <- length(lasso$coef_lassoMin$values[[i]])
+  
+  lasso$coef_lasso1se$names[[i]] <- rownames(coef(modLasso1se))[which(coef(modLasso1se)[, "s0"] != 0)]
+  lasso$coef_lasso1se$values[[i]] <- as.numeric(coef(modLasso1se))
+  lasso$coef_lasso1se$values[[i]] <- lasso$coef_lasso1se$values[[i]][lasso$coef_lasso1se$values[[i]] != 0]
+  lasso$coef_lasso1se$counts[i] <- length(lasso$coef_lasso1se$values[[i]])
+  
+  
+  probs_lassoMin <- predict(modLassoMin, s = lasso$lassoMin[i], newx = as.matrix(X_test), type = "response")
+  probs_lasso1se <- predict(modLasso1se, s = lasso$lasso1se[i], newx = as.matrix(X_test), type = "response")
+
+  Yhat_lassoMin <- ifelse(probs_lassoMin > 0.5, 1, 0)
+  Yhat_lasso1se <- ifelse(probs_lasso1se > 0.5, 1, 0)
+  
+  lasso$accuracy_lassoMin[i] <- GETaccuracy(Y_test, Yhat_lassoMin)
+  lasso$accuracy_lasso1se[i] <- GETaccuracy(Y_test, Yhat_lasso1se)
+}
+lasso
+```
+
+
+```{r}
+cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial", type.measure = "class")
+lassoMin <- cv_lasso$lambda.min 
+lasso1se <- cv_lasso$lambda.1se
+lassoMin
+lasso1se
+```
+
+```{r}
+modLassoMin <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lassoMin, family = "binomial")
+modLasso1se <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso1se, family = "binomial")
+```
+
+```{r}
+coef_lassoMin <- coef(modLassoMin)
+coef_lassoMin <- as.numeric(coef_lassoMin)
+coef_lassoMin <- coef_lassoMin[coef_lassoMin != 0] #see how many variables were selected
+rownames(coef(modLassoMin))[which(coef(modLassoMin)[, "s0"] != 0)]
+```
+
+```{r}
+coef_lasso1se <- coef(modLasso1se)
+coef_lasso1se <- as.numeric(coef_lasso1se)
+coef_lasso1se <- coef_lasso1se[coef_lasso1se != 0] #see how many variables were selected
+rownames(coef(modLasso1se))[which(coef(modLasso1se)[, "s0"] != 0)]
+coef_lasso1se 
+```
+
+```{r}
+probs_lassoMin <- predict(modLassoMin, s = lassoMin, newx = as.matrix(X_test), type = "response")
+probs_lasso1se <- predict(modLasso1se, s = lasso1se, newx = as.matrix(X_test), type = "response")
+```
+
+### ROC
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_lassoMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "green", lwd = 4, main = "ROC Curve of Lasso")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_lasso1se, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "green", lwd = 4, main = "ROC Curve of Lasso1se")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_lassoMin <- ifelse(probs_lassoMin > 0.2916667, 1, 0)
+Yhat_lasso1se <- ifelse(probs_lasso1se > 0.3284672, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_lassoMin, observed = Y_test)
+table(predicted = Yhat_lasso1se, observed = Y_test)
+```
+
+```{r}
+logistic_performance(Yhat_lassoMin, Y_test)
+#logistic_performance(Yhat_lasso1se, Y_test)
+```
+
+```{r}
+GETaccuracy(Y_test, Yhat_lassoMin)
+GETaccuracy(Y_test, Yhat_lasso1se)
+```
+
+
+### K-fold lasso
+
+```{r, include=FALSE}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(df))
+
+#assign a new tab equal to random order of spectra
+tab = df[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(df)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_accuracy = 0
+total_error = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test
+  X_train = subset(tabTrain, select = -Class)
+  Y_train = tabTrain$Class
+  X_test = subset(tabTest, select = -Class)
+  Y_test = tabTest$Class
+  
+  #perform cross-validation to find best lambda
+  cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial", grouped = FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 1, 
+                    family = "binomial", lambda = cv_lasso$lambda.min)
+  
+  #find error and accuracyracy
+  probs = predict(modTrain, s = cv_lasso$lambda.min, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > 0.5, 1, 0)
+  
+  #calculate error and accuracy for each fold
+  accuracy = GETaccuracy(Y_test, Y_hat)
+  error = 1 - accuracy
+  
+  #sum up each fold to find total error and accuracyracy
+  total_accuracy = total_accuracy + accuracy
+  total_error = total_error + error
+  
+  #print lambda selected, error, accuracy for each fold
+  cat("Lambda selected for Fold", i, ":", cv_lasso$lambda.min, "\n")
+  cat("accuracy for Fold", i, ":", accuracy, "\n")
+  cat("error for Fold", i, ":", error, "\n\n")
+}
+
+#calculate the average performance
+avg_accuracy = total_accuracy/k
+avg_error = total_error/k
+
+#print performance
+cat("======= End Fold =======\n\n")
+cat("Average accuracy: ", avg_accuracy, "\n")
+cat("Average error: ", avg_error, "\n")
+
+lasso_min_perf <- list(accuracy = avg_accuracy, error = avg_error)
+```
+
+## Elastic
+
+### Find alpha
+
+```{r}
+alpha_list = c()
+for (a in 1:9){
+  cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, family = "binomial", alpha = a/10)
+  alpha_list[a] = min(cv_elastic$cvm)
+}
+alpha_list
+which.min(alpha_list)
+```
+
+```{r}
+alphalist <- seq(0,1,by=0.1)
+elasticnet <- lapply(alphalist, function(a){
+  cv.glmnet(as.matrix(X_train), Y_train, alpha=a, family="binomial", lambda.min.ratio=.001)
+})
+for (i in 1:11) {print(min(elasticnet[[i]]$cvm))}
+```
+
+### Find range lambda
+
+```{r}
+elastic <- list(elasticMin = c(), elastic1se = c(), coef_ElasticMin = list(names = list(), values = list(), counts = c()), coef_Elastic1se = list(names = list(), values = list(), counts = c()), accuracy_ElasticMin = c(), accuracy_Elastic1se = c())
+for (i in 1:10){
+  cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0.7, family = "binomial")
+  elastic$elasticMin[i] <- cv_elastic$lambda.min 
+  elastic$elastic1se[i] <- cv_elastic$lambda.1se
+  
+  modElasticMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elastic$elasticMin[i], family = "binomial")
+  modElastic1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elastic$elastic1se[i], family = "binomial")
+  
+  elastic$coef_ElasticMin$names[[i]] <- rownames(coef(modElasticMin))[which(coef(modElasticMin)[, "s0"] != 0)]
+  elastic$coef_ElasticMin$values[[i]] <- as.numeric(coef(modElasticMin))
+  elastic$coef_ElasticMin$values[[i]] <- elastic$coef_ElasticMin$values[[i]][elastic$coef_ElasticMin$values[[i]] != 0]
+  elastic$coef_ElasticMin$counts[i] <- length(elastic$coef_ElasticMin$values[[i]])
+  
+  elastic$coef_Elastic1se$names[[i]] <- rownames(coef(modElastic1se))[which(coef(modElastic1se)[, "s0"] != 0)]
+  elastic$coef_Elastic1se$values[[i]] <- as.numeric(coef(modElastic1se))
+  elastic$coef_Elastic1se$values[[i]] <- elastic$coef_Elastic1se$values[[i]][elastic$coef_Elastic1se$values[[i]] != 0]
+  elastic$coef_Elastic1se$counts[i] <- length(elastic$coef_Elastic1se$values[[i]])
+  
+  probs_elasticMin <- predict(modElasticMin, s = elastic$elasticMin[i], newx = as.matrix(X_test), type = "response")
+  probs_elastic1se <- predict(modElastic1se, s = elastic$elastic1se[i], newx = as.matrix(X_test), type = "response")
+
+  Yhat_ElasticMin <- ifelse(probs_elasticMin > 0.5, 1, 0)
+  Yhat_Elastic1se <- ifelse(probs_elastic1se > 0.5, 1, 0)
+  
+  elastic$accuracy_ElasticMin[i] = GETaccuracy(Y_test, Yhat_ElasticMin)
+  elastic$accuracy_Elastic1se[i] = GETaccuracy(Y_test, Yhat_Elastic1se)
+}
+elastic
+```
+
+```{r} 
+cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0.7, family = "binomial")
+elasticMin <- cv_elastic$lambda.min 
+elastic1se <- cv_elastic$lambda.1se
+```
+
+```{r}
+elasticMin
+elastic1se
+```
+
+```{r}
+modElasticMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0.1, lambda = elasticMin, family = "binomial")
+modElastic1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0.5, lambda = elastic1se, family = "binomial")
+```
+
+```{r}
+coef_ElasticMin <- coef(modElasticMin)
+coef_ElasticMin <- as.numeric(coef_ElasticMin)
+coef_ElasticMin <- coef_ElasticMin[coef_ElasticMin != 0] #see how many variables were selected
+rownames(coef(modElasticMin))[which(coef(modElasticMin)[, "s0"] != 0)]
+coef_ElasticMin
+```
+
+```{r}
+coef_Elastic1se <- coef(modElastic1se)
+coef_Elastic1se <- as.numeric(coef_Elastic1se)
+coef_Elastic1se <- coef_Elastic1se[coef_Elastic1se != 0] #see how many variables were selected
+rownames(coef(modElastic1se))[which(coef(modElastic1se)[, "s0"] != 0)]
+coef_Elastic1se
+```
+
+```{r}
+probs_elasticMin <- predict(modElasticMin, s = elasticMin, newx = as.matrix(X_test), type = "response")
+probs_elastic1se <- predict(modElastic1se, s = elastic1se, newx = as.matrix(X_test), type = "response")
+```
+
+## ROC
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_elasticMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "grey", lwd = 4, main = "ROC Curve of Elastic")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_elastic1se, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "grey", lwd = 4, main = "ROC Curve of Elastic1se")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_ElasticMin <- ifelse(probs_elasticMin > 0.02590037, 1, 0)
+Yhat_Elastic1se <- ifelse(probs_elastic1se > 0.2349789	, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_ElasticMin, observed = Y_test)
+table(predicted = Yhat_Elastic1se, observed = Y_test)
+```
+
+```{r}
+logistic_performance(Yhat_ElasticMin, Y_test)
+logistic_performance(Yhat_Elastic1se, Y_test)
+```
+
+
+```{r}
+GETaccuracy(Y_test, Yhat_ElasticMin)
+GETaccuracy(Y_test, Yhat_Elastic1se)
+```
+
+### K-fold
+
+```{r, include=FALSE}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(df))
+
+#assign a new tab equal to random order of spectra
+tab = df[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(df)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_accuracy = 0
+total_error = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test
+  X_train = subset(tabTrain, select = -Class)
+  Y_train = tabTrain$Class
+  X_test = subset(tabTest, select = -Class)
+  Y_test = tabTest$Class
+  
+  #perform cross-validation to find best lambda
+  cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0.5, family = "binomial", grouped = FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 0.5, 
+                    family = "binomial", lambda = cv_elastic$lambda.min)
+  
+  #find error and accuracyracy
+  probs = predict(modTrain, s = cv_elastic$lambda.min, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > MAP_threshold, 1, 0)
+  
+  #calculate error and accuracyracy for each fold
+  accuracy = GETaccuracy(Y_test, Y_hat)
+  error = 1 - accuracy
+  
+  #sum up each fold to find total error and accuracyracy
+  total_accuracy = total_accuracy + accuracy
+  total_error = total_error + error
+  
+  #print lambda selected, mse, accuracyracy for each fold
+  cat("Lambda selected for Fold", i, ":", cv_lasso$lambda.min, "\n")
+  cat("accuracy for Fold", i, ":", accuracy, "\n")
+  cat("error for Fold", i, ":", error, "\n\n")
+}
+
+#calculate the average performance
+avg_accuracy = total_accuracy/k
+avg_error = total_error/k
+
+#print performance
+cat("======= End Fold =======\n\n")
+cat("Average accuracy: ", avg_accuracy, "\n")
+cat("Average error: ", avg_error, "\n")
+
+elastic_min_perf <- list(accuracy = avg_accuracy, error = avg_error)
+```
+
+## KNN
+
+```{r}
+df <- read.csv("data.csv", header = TRUE, sep = ",")
+dataset <- na.omit(df)
+dataset[,-1204] <- scale(dataset[,-1204])
+validationIndex <- createDataPartition(dataset$Class, p=0.70, list=FALSE)
+train <- dataset[validationIndex,] # 70% of data to training
+test <- dataset[-validationIndex,]
+```
+
+```{r}
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+```
+
+```{r}
+fit.knn <- train(Class~., data=train, method="knn",
+                 metric=metric ,trControl=trainControl)
+knn.k1 <- fit.knn$bestTune # keep this Initial k for testing with knn() function in next section
+print(fit.knn)
+```
+
+```{r}
+prediction <- predict(fit.knn, newdata = test)
+cf <- confusionMatrix(prediction, as.factor(test$Class))
+print(cf)
+logistic_performance(prediction, test$Class)
+```
+
+```{r}
+library(caret)
+library(class)
+```
+
+
+# Selected variables fit
+
+```{r}
+df_ = df[,c(selected_variables_37,'Class')]
+df_[,-38] <- scale(df_[,-38])
+validationIndex <- createDataPartition(reduced_data$Class, p=0.70, list=FALSE)
+train <- df_[validationIndex,] # 70% of data to training
+test <- df_[-validationIndex,]
+```
+
+```{r}
+#train = train[,c(selected_variables_138,'Class')]
+#test = test[,c(selected_variables_138,'Class')]
+X_train = subset(train, select = -Class)
+X_test = subset(test, select = -Class)
+Y_train = train$Class
+Y_test = test$Class
+```
+
+```{r}
+#X_train <- X_train[,selected_variables]
+#X_test <- X_test[,selected_variables]
+```
+
+## Linear 
+
+* Since p >> n
+
+```{r}
+reg <- lm(Class~., data = train)
+Yhat_linear <- predict(reg, newdata = test)
+GETaccuracy(Y_test, Yhat_linear)
+```
+
+## Logit
+
+```{r}
+modLogit <- glm(Class~., family = binomial, data = train)
+probs_logit <- predict.glm(modLogit, type = "response", newdata = test)
+summary(modLogit)
+```
+
+### ROC 
+```{r}
+par(pty = "s")
+roc(Y_train, modLogit$fitted.values, plot = TRUE, legacy.axes = TRUE, xlab = "False Positive Rate", ylab = "True Positive Rate", col = "cadetblue", lwd = 4, main = "ROC Curve of Full Logistic")
+roc_info <- roc(Y_train, modLogit$fitted.values, legacy.axes = TRUE)
+roc_df <- data.frame(tpr = roc_info$sensitivities*100, fpr = (1-roc_info$specificities)*100, thresholds = roc_info$thresholds)
+roc_df
+```
+
+```{r}
+Yhat_logit <- ifelse(probs_logit > 0.2918812, 1, 0)
+logistic_performance(Yhat_logit, Y_test)
+```
+
+## Ridge
+
+```{r}
+ridge <- list(ridgeMin = c(), ridge1se = c(), accuracy_ridgeMin = c(), accuracy_ridge1se = c())
+for (i in 1:10){
+  cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial")
+  ridge$ridgeMin[i] <- cv_ridge$lambda.min 
+  ridge$ridge1se[i] <- cv_ridge$lambda.1se
+  
+  modRidgeMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge$ridgeMin[i], family = "binomial")
+  modRidge1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge$ridge1se[i], family = "binomial")
+  
+  probs_ridgeMin <- predict(modRidgeMin, s = ridge$ridgeMin[i], newx = as.matrix(X_test), type = "response")
+  probs_ridge1se <- predict(modRidge1se, s = ridge$ridge1se[i], newx = as.matrix(X_test), type = "response")
+  
+  Yhat_ridgeMin <- ifelse(probs_ridgeMin > 0.4217271, 1, 0)
+  Yhat_ridge1se <- ifelse(probs_ridge1se > 0.4216677, 1, 0)
+  
+  ridge$accuracy_ridgeMin[i] <- GETaccuracy(Y_test, Yhat_ridgeMin)
+  ridge$accuracy_ridge1se[i] <- GETaccuracy(Y_test, Yhat_ridge1se)
+}
+ridge
+```
+
+```{r}
+cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial")
+ridgeMin <- cv_ridge$lambda.min 
+ridge1se <- cv_ridge$lambda.1se
+ridgeMin 
+ridge1se
+```
+
+```{r}
+modRidgeMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridgeMin, family = "binomial")
+modRidge1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0, lambda = ridge1se, family = "binomial")
+```
+
+```{r}
+probs_ridgeMin <- predict(modRidgeMin, s = ridgeMin, newx = as.matrix(X_test), type = "response")
+probs_ridge1se <- predict(modRidge1se, s = ridge1se, newx = as.matrix(X_test), type = "response")
+```
+
+```{r}
+#print sorted from smallest to biggest all the coeff
+coef_RidgeMin <- coef(modRidgeMin)
+rownames(coef_RidgeMin)[order(coef_RidgeMin)]
+```
+
+### ROC 
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_ridgeMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "red", lwd = 4, main = "ROC Curve of Ridge")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_ridge1se, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "red", lwd = 4, main = "ROC Curve of Ridge1se")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_ridgeMin <- ifelse(probs_ridgeMin > 0.28688886, 1, 0)
+Yhat_ridge1se <- ifelse(probs_ridge1se > 0.3902084, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_ridgeMin, observed = Y_test)
+#table(predicted = Yhat_ridge1se, observed = Y_test)
+ridgeMin_acc = mean(Yhat_ridgeMin == Y_test)
+ridgeMin_err = 1 - ridgeMin_acc
+#ridge1se_acc = mean(Yhat_ridge1se == Y_test)
+#ridge1se_err = 1 - ridge1se_acc
+ridgeMin_acc
+ridgeMin_err
+#ridge1se_acc
+#ridge1se_err
+```
+
+```{r}
+logistic_performance(Yhat_ridgeMin, Y_test)
+logistic_performance(Yhat_ridge1se, Y_test)
+```
+
+```{r}
+GETaccuracy(Y_test, Yhat_ridgeMin)
+GETaccuracy(Y_test, Yhat_ridge1se)
+```
+
+## Lasso
+
+```{r}
+lasso <- list(lassoMin = c(), lasso1se = c(), coef_lassoMin = list(names = list(), values = list(), counts = c()), coef_lasso1se = list(names = list(), values = list(), counts = c()), accuracy_lassoMin = c(), accuracy_lasso1se = c())
+for (i in 1:10){
+  cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial")
+  lasso$lassoMin[i] <- cv_lasso$lambda.min 
+  lasso$lasso1se[i] <- cv_lasso$lambda.1se
+  
+  modLassoMin <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso$lassoMin[i], family = "binomial")
+  modLasso1se <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso$lasso1se[i], family = "binomial")
+  
+  lasso$coef_lassoMin$names[[i]] <- rownames(coef(modLassoMin))[which(coef(modLassoMin)[, "s0"] != 0)]
+  lasso$coef_lassoMin$values[[i]] <- as.numeric(coef(modLassoMin))
+  lasso$coef_lassoMin$values[[i]] <- lasso$coef_lassoMin$values[[i]][lasso$coef_lassoMin$values[[i]] != 0]
+  lasso$coef_lassoMin$counts[i] <- length(lasso$coef_lassoMin$values[[i]])
+  
+  lasso$coef_lasso1se$names[[i]] <- rownames(coef(modLasso1se))[which(coef(modLasso1se)[, "s0"] != 0)]
+  lasso$coef_lasso1se$values[[i]] <- as.numeric(coef(modLasso1se))
+  lasso$coef_lasso1se$values[[i]] <- lasso$coef_lasso1se$values[[i]][lasso$coef_lasso1se$values[[i]] != 0]
+  lasso$coef_lasso1se$counts[i] <- length(lasso$coef_lasso1se$values[[i]])
+  
+  
+  probs_lassoMin <- predict(modLassoMin, s = lasso$lassoMin[i], newx = as.matrix(X_test), type = "response")
+  probs_lasso1se <- predict(modLasso1se, s = lasso$lasso1se[i], newx = as.matrix(X_test), type = "response")
+
+  Yhat_lassoMin <- ifelse(probs_lassoMin > 0.5, 1, 0)
+  Yhat_lasso1se <- ifelse(probs_lasso1se > 0.5, 1, 0)
+  
+  lasso$accuracy_lassoMin[i] <- GETaccuracy(Y_test, Yhat_lassoMin)
+  lasso$accuracy_lasso1se[i] <- GETaccuracy(Y_test, Yhat_lasso1se)
+}
+lasso
+```
+
+```{r}
+cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial")
+lassoMin <- cv_lasso$lambda.min 
+lasso1se <- cv_lasso$lambda.1se
+lassoMin
+lasso1se
+```
+
+```{r}
+modLassoMin <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lassoMin, family = "binomial")
+modLasso1se <- glmnet(as.matrix(X_train), Y_train, alpha = 1, lambda = lasso1se, family = "binomial")
+```
+
+```{r}
+coef_lassoMin <- coef(modLassoMin)
+coef_lassoMin <- as.numeric(coef_lassoMin)
+coef_lassoMin <- coef_lassoMin[coef_lassoMin != 0] #see how many variables were selected
+rownames(coef(modLassoMin))[which(coef(modLassoMin)[, "s0"] != 0)]
+```
+
+```{r}
+coef_lasso1se <- coef(modLasso1se)
+coef_lasso1se <- as.numeric(coef_lasso1se)
+coef_lasso1se <- coef_lasso1se[coef_lasso1se != 0] #see how many variables were selected
+rownames(coef(modLasso1se))[which(coef(modLasso1se)[, "s0"] != 0)]
+coef_lasso1se 
+```
+
+```{r}
+probs_lassoMin <- predict(modLassoMin, s = lassoMin, newx = as.matrix(X_test), type = "response")
+probs_lasso1se <- predict(modLasso1se, s = lasso1se, newx = as.matrix(X_test), type = "response")
+```
+
+### ROC
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_lassoMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "green", lwd = 4, main = "ROC Curve of Lasso")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_lasso1se, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "green", lwd = 4, main = "ROC Curve of Lasso1se")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_lassoMin <- ifelse(probs_lassoMin > 0.334601113, 1, 0)
+#Yhat_lasso1se <- ifelse(probs_lasso1se > 0.3284672, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_lassoMin, observed = Y_test)
+#table(predicted = Yhat_lasso1se, observed = Y_test)
+```
+
+```{r}
+logistic_performance(Yhat_lassoMin, Y_test)
+#logistic_performance(Yhat_lasso1se, Y_test)
+```
+
+```{r}
+GETaccuracy(Y_test, Yhat_lassoMin)
+#GETaccuracy(Y_test, Yhat_lasso1se)
+```
+
+## Elastic
+
+```{r}
+alpha_list = c()
+for (a in 1:9){
+  cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, family = "binomial", alpha = a/10)
+  alpha_list[a] = min(cv_elastic$cvm)
+}
+alpha_list
+which.min(alpha_list)
+```
+
+```{r}
+alphalist <- seq(0,1,by=0.1)
+elasticnet <- lapply(alphalist, function(a){
+  cv.glmnet(as.matrix(X_train), Y_train, alpha=a, family="binomial", lambda.min.ratio=.001)
+})
+for (i in 1:11) {print(min(elasticnet[[i]]$cvm))}
+```
+
+```{r}
+elastic <- list(elasticMin = c(), elastic1se = c(), coef_ElasticMin = list(names = list(), values = list(), counts = c()), coef_Elastic1se = list(names = list(), values = list(), counts = c()), accuracy_ElasticMin = c(), accuracy_Elastic1se = c())
+for (i in 1:10){
+  cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0.7, family = "binomial")
+  elastic$elasticMin[i] <- cv_elastic$lambda.min 
+  elastic$elastic1se[i] <- cv_elastic$lambda.1se
+  
+  modElasticMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elastic$elasticMin[i], family = "binomial")
+  modElastic1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elastic$elastic1se[i], family = "binomial")
+  
+  elastic$coef_ElasticMin$names[[i]] <- rownames(coef(modElasticMin))[which(coef(modElasticMin)[, "s0"] != 0)]
+  elastic$coef_ElasticMin$values[[i]] <- as.numeric(coef(modElasticMin))
+  elastic$coef_ElasticMin$values[[i]] <- elastic$coef_ElasticMin$values[[i]][elastic$coef_ElasticMin$values[[i]] != 0]
+  elastic$coef_ElasticMin$counts[i] <- length(elastic$coef_ElasticMin$values[[i]])
+  
+  elastic$coef_Elastic1se$names[[i]] <- rownames(coef(modElastic1se))[which(coef(modElastic1se)[, "s0"] != 0)]
+  elastic$coef_Elastic1se$values[[i]] <- as.numeric(coef(modElastic1se))
+  elastic$coef_Elastic1se$values[[i]] <- elastic$coef_Elastic1se$values[[i]][elastic$coef_Elastic1se$values[[i]] != 0]
+  elastic$coef_Elastic1se$counts[i] <- length(elastic$coef_Elastic1se$values[[i]])
+  
+  probs_elasticMin <- predict(modElasticMin, s = elastic$elasticMin[i], newx = as.matrix(X_test), type = "response")
+  probs_elastic1se <- predict(modElastic1se, s = elastic$elastic1se[i], newx = as.matrix(X_test), type = "response")
+
+  Yhat_ElasticMin <- ifelse(probs_elasticMin > 0.5, 1, 0)
+  Yhat_Elastic1se <- ifelse(probs_elastic1se > 0.5, 1, 0)
+  
+  elastic$accuracy_ElasticMin[i] = GETaccuracy(Y_test, Yhat_ElasticMin)
+  elastic$accuracy_Elastic1se[i] = GETaccuracy(Y_test, Yhat_Elastic1se)
+}
+elastic
+```
+
+```{r} 
+cv_elastic <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0.7, family = "binomial")
+elasticMin <- cv_elastic$lambda.min 
+elastic1se <- cv_elastic$lambda.1se
+elasticMin
+elastic1se
+```
+
+```{r}
+modElasticMin <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elasticMin, family = "binomial")
+modElastic1se <- glmnet(as.matrix(X_train), Y_train, alpha = 0.7, lambda = elastic1se, family = "binomial")
+```
+
+```{r}
+coef_ElasticMin <- coef(modElasticMin)
+coef_ElasticMin <- as.numeric(coef_ElasticMin)
+coef_ElasticMin <- coef_ElasticMin[coef_ElasticMin != 0] #see how many variables were selected
+rownames(coef(modElasticMin))[which(coef(modElasticMin)[, "s0"] != 0)]
+coef_ElasticMin
+```
+
+```{r}
+coef_Elastic1se <- coef(modElastic1se)
+coef_Elastic1se <- as.numeric(coef_Elastic1se)
+coef_Elastic1se <- coef_Elastic1se[coef_Elastic1se != 0] #see how many variables were selected
+rownames(coef(modElastic1se))[which(coef(modElastic1se)[, "s0"] != 0)]
+coef_Elastic1se
+```
+
+```{r}
+probs_elasticMin <- predict(modElasticMin, s = elasticMin, newx = as.matrix(X_test), type = "response")
+probs_elastic1se <- predict(modElastic1se, s = elastic1se, newx = as.matrix(X_test), type = "response")
+```
+
+### ROC
+
+```{r}
+par(pty = "s")
+perf = performance(prediction(probs_elasticMin, Y_test),  'tpr', 'fpr')
+attributes(perf)
+plot(perf, col = "grey", lwd = 4, main = "ROC Curve of Elastic")
+abline(0,1)
+
+roc_df <- data.frame(tpr = perf@y.values, fpr = perf@x.values, thresholds = perf@alpha.values)
+colnames(roc_df) <- c("TPR", "FPR", "Thresholds")
+roc_df
+```
+
+```{r}
+Yhat_ElasticMin <- ifelse(probs_elasticMin > 0.33726031, 1, 0)
+#Yhat_Elastic1se <- ifelse(probs_elastic1se > 0.3284672, 1, 0)
+```
+
+```{r}
+table(predicted = Yhat_ElasticMin, observed = Y_test)
+#table(predicted = Yhat_Elastic1se, observed = Y_test)
+```
+
+```{r}
+logistic_performance(Yhat_ElasticMin, Y_test)
+#logistic_performance(Yhat_Elastic1se, Y_test)
+Y_test
+```
+
+```{r}
+GETaccuracy(Y_test, Yhat_ElasticMin)
+#GETaccuracy(Y_test, Yhat_Elastic1se)
+```
+
+#KNN
+
+```{r}
+train = train[,c(selected_variables_37,'Class')]
+test = test[,c(selected_variables_37,'Class')]
+X_train = subset(train, select = -Class)
+X_test = subset(test, select = -Class)
+Y_train = train$Class
+Y_test = test$Class
+```
+
+```{r}
+library(caret)
+library(class)
+df_ <- read.csv("data.csv", header = TRUE, sep = ",")
+dataset <- na.omit(df_)
+dataset <- dataset[,c(selected_variables, 'Class')]
+dataset[,-38] <- scale(dataset[,-38])
+validationIndex <- createDataPartition(dataset$Class, p=0.70, list=FALSE)
+train <- dataset[validationIndex,] # 70% of data to training
+test <- dataset[-validationIndex,]
+```
+
+```{r}
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+```
+
+```{r}
+fit.knn <- train(Class~., data=train, method="knn",
+                 metric=metric ,trControl=trainControl)
+knn.k1 <- fit.knn$bestTune # keep this Initial k for testing with knn() function in next section
+print(fit.knn)
+```
+```{r}
+prediction <- predict(fit.knn, newdata = test)
+cf <- confusionMatrix(prediction, as.factor(test$Class))
+print(cf)
+logistic_performance(prediction, test$Class)
+```
+
+# Polynomial Relation
+
+```{r}
+# Assuming 'Class' is the binary response variable
+# Assuming 'train' and 'test' are your data frames
+
+# Generate polynomial features (quadratic terms) for all predictor variables
+train_poly <- cbind(train[,-38], train[,-38]^2)
+test_poly <- cbind(test[-38], test[,-38]^2)
+colnames(train_poly) <- make.unique(colnames(train_poly), sep = "_")
+train_poly <- cbind(train_poly, train$Class)
+test_poly <- cbind(test_poly, test$Class)
+
+# Fit the logistic regression model with quadratic terms
+modLogit_poly <- glm(train$Class~., family = binomial, data = subset(train_poly, select = -`train$Class`))
+summary(modLogit_poly)
+
+# Predict probabilities on the test set
+probs_logit_poly <- predict(modLogit_poly, type = "response", newdata = test_poly)
+
+```
+
+
+
+
+
+
+
+
+
