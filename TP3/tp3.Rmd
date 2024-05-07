@@ -1,0 +1,1188 @@
+---
+title: "Practical Session 3 - Modèles de Régression Linéaire"
+author : "Richard CHEAM & Menghor THUO"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+  html_document: default
+date: '16-11-2023'
+header-includes:
+  - \usepackage{bbold}
+  - \usepackage{titlesec}
+  - \usepackage {amsmath}
+  #- \newcommand{\sectionbreak}{\clearpage}
+  #- \newcommand{\subsectionbreak}{\clearpage}
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+rm(list=ls())
+graphics.off()
+library(glmnet)
+library(MASS)
+```
+
+# Function implementation 
+
+* The functions below are implemented in order to facilitate the work later. 
+
+```{r}
+logistic_performance <- function(Y_hat, Y){
+  
+  #initialize confusion matrix
+  confusion_matrix = table(Predicted = Y_hat, Observed = Y)
+  cat("Confusion matrix:\n\n")
+  print(confusion_matrix)
+  cat("\n")
+  
+  #initialize the components to measure the quality of the model from matrix
+  TN <- confusion_matrix[1,1]
+  TP <- confusion_matrix[2,2]
+  FN <- confusion_matrix[1,2]
+  FP <- confusion_matrix[2,1]
+  TOTAL <- TN + TP + FN + FP
+  
+  #find accuracy, error_rate,...,FNR, of the model
+  accuracy <- (TP + TN)/TOTAL
+  error_rate <- (FP + FN)/TOTAL
+  recall <- TP/(FN + TP)
+  specificity <- TN/(TN + FP)
+  precision <- TP/(FP + TP)
+  FPR <- FP/(TN + FP)
+  FNR <- FN/(FN + TP)
+  
+  #display those values 
+  cat("Accuracy:", accuracy*100, "%", "\n")
+  cat("Error rate: ", error_rate*100, "%", "\n")
+  cat("Recall: ", recall*100, "%", "\n")
+  cat("Specificity: ", specificity*100, "%", "\n")
+  cat("Precision: ", precision*100, "%", "\n")
+  cat("False positive rate:", FPR*100, "%", "\n")
+  cat("False negative rate:", FNR*100, "%", "\n")
+  
+  #return a list containing all the values for accessibility
+  return(list(accuracy=accuracy, error_rate=error_rate, recall=recall, 
+              specificity=specificity, precision=precision, FPR=FPR, FNR=FNR))
+}
+```
+
+```{r}
+MSE <- function(Y, Y_hat){
+  obs = length(Y)
+  return ((1/obs) * sum((Y-Y_hat)^2))
+}
+```
+
+# II. Cookies Study
+
+* First, we read the cookies dataset as a dataframe and load into a variable called $df$. We then separate the $Y$ dependent variable (fat) and the $X$ explanatory variables (spectra information), where the number of observations, $n = 32$, and the predictors, $p = 700$.
+
+```{r}
+#read the data from csv file
+df = read.csv(file="cookies.csv", sep=',', dec='.', header = TRUE)
+
+#initialize a column fat to be Y
+Y <- df$fat
+
+#every column except Y is X
+X <- subset(df, select = -fat)
+```
+
+* Since the aim of this study is to explain if, for one cookie, the fat is greater or not than the median of the fat values for each the cookies, the variable $YBin$ was then taken into account as a binary target instead of fat.
+
+```{r}
+#to get binary target whether the fat (Y) is greater or not than its median
+YBin = as.numeric(Y > median(Y))
+```
+
+## Logistic regression model using features
+
+* Since the spectra of each cookie is sum-up in 5 characteristics (called features), which are the mean, the standard deviation, the slope, the minimum and the maximum of each spectra, hence, it is necessary to calculate them before study a logistic model.
+
+### Calculating features of each cookie
+
+* Each calculation of the features are taken from the section $V. Cookies Study$ of the 1st practical session.
+
+```{r}
+#calculate mean of each cookie by applying mean() function on each row of matrix X
+mean <- apply(X, 1, mean)
+
+#calculate standard deviation of each cookie
+sd <- apply(X , 1, sd) 
+
+#calculate the minimum value of each cookie
+minimum <- apply(X , 1, min) 
+
+#calculate the maximum value of each cookie
+maximum <- apply(X , 1, max) 
+
+#calculate slope for each cookie
+slope <- numeric(32) 
+x <- seq(1,700,1)
+for (i in 1:32){
+  mod <- lm(unlist(df[i, 2:701])~x)
+slope[i] <- coef(mod)[2]
+}
+```
+
+### Full logistic regression
+
+* Here we are preparing the features data by combining them with the binary target $YBin$.
+
+* Since the observation is only 32, meaning we are facing an inadequate amount of data. Thus, splitting data into train and test dataset will not be a good approach. We will now train and test on the same data, and we will look into a k-fold procedure instead later on in order to make a more logical prediction where we make prediction many times on a new dataset.
+
+```{r}
+#bind all the fretures with binary target YBin to get a dataframe
+features_data <- data.frame(YBin, mean, sd, slope, minimum, maximum)
+
+#every column except YBin is predictor, X
+X_features <- subset(features_data, select = -YBin)
+
+#assign YBin column 
+Y_features <- features_data$YBin
+
+#visualize 6 first rows of the dataframe
+head(features_data)
+```
+
+* By manipulate the multiple linear regression, we then have a logistic regression model with a logit function as follows: 
+$$ \log(\frac{p(X)}{1-p(X)}) = \beta_{0} + \beta_{1}X_{1} + ... + \beta_{p}X_{p} $$
+
+$$ \Rightarrow p(X) = \frac{e^{\beta_{0} + \beta_{1}X_{1} + ... + \beta_{p}X_{p}}}{1+e^{\beta_{0} + \beta_{1}X_{1} + ... + \beta_{p}X_{p}}}$$
+
+* Where $X = (X_{1},...,X_{p})$ are $p$ predictors, and $p(X) = Pr(Y=1/X=x)\in[0,1]$ 
+
+#### Estimation step
+
+
+* Here, we fit the logistic model by using $glm()$ function where $family = binomial$ indicates the link function is the logit function.
+
+```{r}
+#fit a full logistic model on features dataset
+logit_mod <- glm(YBin~., family = binomial, data = features_data)
+summary(logit_mod)
+```
+
+* Based on the summary, even though '0.1' at the end of $sd$ and $slope$ predictors have a small impact on response variable, they are the most significant ones in this case with the smallest p-value compared to others in which we reject $H_{0}$. We will see later if this is still the case for other approaches such as variable selection, etc.
+
+#### Prediction step
+
+* By using $predict.glm()$ function with the argument $type = response$, the output will be the probabilities. 
+
+```{r}
+#estimation (computation) of the probability
+probs <- predict.glm(logit_mod, type = "response")
+```
+
+#### Decision step
+
+* In this step, by considering the MAP (Maximum A Posteriori) threshold choice S = 0.5, which means $\hat{Y} = 1$ if $p(X) > S$, and $\hat{Y} = 0$ otherwise.
+
+```{r}
+#choose a threshold S, then make a binary decision based on the probab obtained
+MAP_threshold <- 0.5
+Y_hat <- ifelse(probs > MAP_threshold, 1, 0)
+cat("Prediction: ", Y_hat)
+```
+
+
+* By using the function implemented above we have the overview of this model as below:
+
+```{r}
+performance <- logistic_performance(Y_hat, features_data$YBin)
+```
+
+#### Compute odd-ratio
+
+* Odd-ratio is important as it is an indicator used to characterized the negative or positive influence of a co-variable on the binary target Y.
+
+```{r}
+OR <- exp(logit_mod$coefficients)
+OR
+```
+
+* $OR < 1$ means a negative influence of $X$ on $Y$, and $OR > 1$ means a positive influence.
+
+* We can see only $mean$ and $slope$ are smaller than 1, whereas the others are greater than 1. Visibly, the OR of infinity $(sd)$ can occur when there is perfect prediction or separation in the data. We will then see if it is the case in the variable selection section.
+
+#### K-fold cross validation for logistic regression
+
+* Since we have an insufficient amount of data, then splitting data will not be a good approach to evaluate this model, hence, we consider instead the k-fold procedure.
+
+```{r}
+#algo from prof
+
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(features_data))
+
+#assign a new tab equal to random order of features_data
+tab = features_data[ind,]
+
+#initialize number of folds
+k = 5
+
+#num of obs in order to find each block
+n = nrow(features_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+# initialize the total performance metrics of all folds
+tot_accuracy = 0;
+tot_error = 0;
+tot_recall = 0;
+tot_specificity = 0;
+tot_precision = 0;
+tot_fpr = 0;
+tot_fnr = 0;
+
+#k-fold procedure
+for (i in 1:k){
+  
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6 
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #train generalized linear model
+  modTrain = glm(YBin~., family = "binomial", data = tabTrain)
+  
+  #prediction and decision step for logistic regression
+  Y_hat = predict.glm(modTrain, type = "response", newdata = tabTest)
+  Y_hat = ifelse(Y_hat > MAP_threshold, 1, 0)
+  
+  #print performance for i-fold
+  performance = logistic_performance(Y_hat, tabTest$YBin)
+  cat("\n")
+  
+  #calculate total of the performance metrics for each fold
+  tot_accuracy = tot_accuracy + performance$accuracy;
+  tot_error = tot_error + performance$error_rate;
+  tot_recall = tot_recall + performance$recall;
+  tot_specificity = tot_specificity + performance$specificity;
+  tot_precision = tot_precision + performance$precision;
+  tot_fpr = tot_fpr + performance$FPR;
+  tot_fnr = tot_fnr + performance$FNR;
+}
+
+#calculate average of the performance
+avg_accuracy = (tot_accuracy / k)
+avg_error = (tot_error / k)
+avg_recall = (tot_recall / k)
+avg_specificity = (tot_specificity / k)
+avg_precision = (tot_precision / k)
+avg_fpr = (tot_fpr / k)
+avg_fnr = (tot_fnr / k)
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+#print all metrics, average performance of the k-fold cross validation
+cat("Average accuracy:", avg_accuracy*100, "%", "\n")
+cat("Average error rate: ", avg_error*100, "%", "\n")
+cat("Average recall: ", avg_recall*100, "%", "\n")
+cat("Average specificity: ", avg_specificity*100, "%", "\n")
+cat("Average precision: ", avg_precision*100, "%", "\n")
+cat("Average false positive rate:", avg_fpr*100, "%", "\n")
+cat("Average false negative rate:", avg_fnr*100, "%", "\n")
+
+#save average performance values to a list for comparison
+logit_avg_perf <- list(average_accuracy = avg_accuracy, 
+                       average_error = avg_error, 
+                       average_recall = avg_recall, 
+                       average_specificity = avg_specificity, 
+                       average_precision = avg_precision, 
+                       average_fpr = avg_fpr, 
+                       average_fnr = avg_fnr)
+```
+
+* From the output above, we can see that by initialize the number of fold to 5, and use the k-1 fold trained model on the unseen test data, the accuracy dropped in which it is more reasonable and at the same time reliable since we tested many times on the new data. We will then consider this performance rather than the previous one.
+
+
+### Logistic regression with variable selection
+
+#### Forward selection
+
+* Since the null $(M_{0})$ will give all 0 as the output, it will not be taken into account. We will now look into the variable selection method. By using $step()$ function without defining $k$ in its arguments, this model will follow the AIC criterion.
+
+```{r}
+res0 <- glm(YBin~1, data = features_data, family = binomial);
+resFor <- step(res0, list(upper=logit_mod), direction='forward')
+```
+
+```{r}
+formula(resFor)
+```
+
+* From the formula, we can see that this model eliminated all the variables except for the $minimum$. We now will see its performance below.
+
+```{r}
+probsFor <- predict.glm(resFor, type = "response")
+Y_hat_for <- ifelse(probsFor > MAP_threshold, 1, 0)
+perf_for <- logistic_performance(Y_hat_for, features_data$YBin)
+```
+
+* The accuracy obtained is lower than what we had before by doing multiple logistic regression.
+
+#### K-fold cross validation for forward selection
+
+* We will now perform k-fold cross validation by using forward selection approach to see whether it is better than the model we previously obtained.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(features_data))
+
+#assign a new tab equal to random order of features_data
+tab = features_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#initialize number of obs
+n = nrow(features_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+# initialize the total performance metrics of all folds
+tot_accuracy = 0;
+tot_error = 0;
+tot_recall = 0;
+tot_specificity = 0;
+tot_precision = 0;
+tot_fpr = 0;
+tot_fnr = 0;
+
+#k-fold process
+for (i in 1:k){
+  
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6 
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+
+  #train forward selection model
+  modTrain = step(res0, list(upper=logit_mod), direction='forward')
+  
+  #prediction and decision step
+  Y_hat = predict.glm(modTrain, type = "response", newdata = tabTest)
+  Y_hat = ifelse(Y_hat > MAP_threshold, 1, 0)
+  
+  #find performance of this model
+  performance = logistic_performance(Y_hat, tabTest$YBin)
+  cat("\n")
+  
+  #calculate total accuracy for each fold
+  tot_accuracy = tot_accuracy + performance$accuracy;
+  tot_error = tot_error + performance$error_rate;
+  tot_recall = tot_recall + performance$recall;
+  tot_specificity = tot_specificity + performance$specificity;
+  tot_precision = tot_precision + performance$precision;
+  tot_fpr = tot_fpr + performance$FPR;
+  tot_fnr = tot_fnr + performance$FNR;
+}
+
+#find average performance of this model
+avg_accuracy = (tot_accuracy / k)
+avg_error = (tot_error / k)
+avg_recall = (tot_recall / k)
+avg_specificity = (tot_specificity / k)
+avg_precision = (tot_precision / k)
+avg_fpr = (tot_fpr / k)
+avg_fnr = (tot_fnr / k)
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+#display the average performance of k-fold
+cat("Average accuracy:", avg_accuracy*100, "%", "\n")
+cat("Average error rate: ", avg_error*100, "%", "\n")
+cat("Average recall: ", avg_recall*100, "%", "\n")
+cat("Average specificity: ", avg_specificity*100, "%", "\n")
+cat("Average precision: ", avg_precision*100, "%", "\n")
+cat("Average false positive rate:", avg_fpr*100, "%", "\n")
+cat("Average false negative rate:", avg_fnr*100, "%", "\n")
+
+#save average performance values to a list for comparison
+logit_avg_for <- list(average_accuracy = avg_accuracy, 
+                      average_error = avg_error, 
+                      average_recall = avg_recall, 
+                      average_specificity = avg_specificity, 
+                      average_precision = avg_precision, 
+                      average_fpr = avg_fpr, 
+                      average_fnr = avg_fnr)
+```
+
+* The accuracy is surprisingly higher than the one without using k-fold process. We will now see the backward selection.
+
+#### Backward selection
+
+* Now we perform backward selection to see if it is a better model than forward, and to see as well the variables remaining.
+
+```{r}
+resBack <- step(logit_mod, direction='backward')
+```
+
+```{r}
+formula(resBack)
+```
+
+* This model neglects the others except $sd$ and $slope$.
+
+```{r}
+probsBack <- predict.glm(resBack, type = "response")
+Y_hat_back <- ifelse(probsBack > MAP_threshold, 1, 0)
+perf_back <- logistic_performance(Y_hat_back, features_data$YBin)
+```
+
+#### K-fold cross validtion for backward
+
+* We then perform k-fold cross-validation in order to get unbiased accuracy (average).
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(features_data))
+
+#assign a new tab equal to random order of features_data
+tab = features_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(features_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+# initialize the total performance metrics of all folds
+tot_accuracy = 0;
+tot_error = 0;
+tot_recall = 0;
+tot_specificity = 0;
+tot_precision = 0;
+tot_fpr = 0;
+tot_fnr = 0;
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6 
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #train stepwise selection
+  modTrain = step(logit_mod, direction='backward')
+  
+  #prediction and decision step for logistic regression
+  Y_hat = predict.glm(modTrain, type = "response", newdata = tabTest)
+  Y_hat = ifelse(Y_hat > MAP_threshold, 1, 0)
+  
+  #find performance for this model
+  performance = logistic_performance(Y_hat, tabTest$YBin)
+  cat("\n")
+  
+  #sum up all metrics for each fold to find total
+  tot_accuracy = tot_accuracy + performance$accuracy;
+  tot_error = tot_error + performance$error_rate;
+  tot_recall = tot_recall + performance$recall;
+  tot_specificity = tot_specificity + performance$specificity;
+  tot_precision = tot_precision + performance$precision;
+  tot_fpr = tot_fpr + performance$FPR;
+  tot_fnr = tot_fnr + performance$FNR;
+}
+
+#find average performance
+avg_accuracy = (tot_accuracy / k)
+avg_error = (tot_error / k)
+avg_recall = (tot_recall / k)
+avg_specificity = (tot_specificity / k)
+avg_precision = (tot_precision / k)
+avg_fpr = (tot_fpr / k)
+avg_fnr = (tot_fnr / k)
+
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+
+cat("Average accuracy:", avg_accuracy*100, "%", "\n")
+cat("Average error rate: ", avg_error*100, "%", "\n")
+cat("Average recall: ", avg_recall*100, "%", "\n")
+cat("Average specificity: ", avg_specificity*100, "%", "\n")
+cat("Average precision: ", avg_precision*100, "%", "\n")
+cat("Average false positive rate:", avg_fpr*100, "%", "\n")
+cat("Average false negative rate:", avg_fnr*100, "%", "\n")
+
+#save average performance values to a list for comparison
+logit_avg_back <- list(average_accuracy = avg_accuracy, 
+                                average_error = avg_error, 
+                                average_recall = avg_recall, 
+                                average_specificity = avg_specificity, 
+                                average_precision = avg_precision, 
+                                average_fpr = avg_fpr, 
+                                average_fnr = avg_fnr)
+```
+
+
+#### Stepwise selection
+
+* Now we perform stepwise selection to see if it is a better model than forward and backward, and also to see the variables remaining.
+
+```{r}
+resStep <- step(logit_mod, direction='both')
+```
+
+```{r}
+formula(resStep)
+```
+
+* It remains the same variables $sd$, and $slope$ as the backward.
+
+```{r}
+probsStep <- predict.glm(resStep, type = "response")
+Y_hat_step <- ifelse(probsStep > MAP_threshold, 1, 0)
+perf_step <- logistic_performance(Y_hat_step, features_data$YBin)
+```
+
+* Here we can see the performance of this model that it is the same as backward since they prioritize the same predictors.
+
+#### K-fold cross validtion for stepwise
+
+* We then perform k-fold and since the selection of variable is the same between backward and stepwise selection, the accuracy of both are bound to be the same.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(features_data))
+
+#assign a new tab equal to random order of features_data
+tab = features_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(features_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+# initialize the total performance metrics of all folds
+tot_accuracy = 0;
+tot_error = 0;
+tot_recall = 0;
+tot_specificity = 0;
+tot_precision = 0;
+tot_fpr = 0;
+tot_fnr = 0;
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6 
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #train stepwise selection
+  modTrain = step(logit_mod, direction='both')
+  
+  #prediction and decision step for logistic regression
+  Y_hat = predict.glm(modTrain, type = "response", newdata = tabTest)
+  Y_hat = ifelse(Y_hat > MAP_threshold, 1, 0)
+  
+  #find performance for this model
+  performance = logistic_performance(Y_hat, tabTest$YBin)
+  cat("\n")
+  
+  #sum up all metrics for each fold to find total
+  tot_accuracy = tot_accuracy + performance$accuracy;
+  tot_error = tot_error + performance$error_rate;
+  tot_recall = tot_recall + performance$recall;
+  tot_specificity = tot_specificity + performance$specificity;
+  tot_precision = tot_precision + performance$precision;
+  tot_fpr = tot_fpr + performance$FPR;
+  tot_fnr = tot_fnr + performance$FNR;
+}
+
+#find average performance
+avg_accuracy = (tot_accuracy / k)
+avg_error = (tot_error / k)
+avg_recall = (tot_recall / k)
+avg_specificity = (tot_specificity / k)
+avg_precision = (tot_precision / k)
+avg_fpr = (tot_fpr / k)
+avg_fnr = (tot_fnr / k)
+
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+
+cat("Average accuracy:", avg_accuracy*100, "%", "\n")
+cat("Average error rate: ", avg_error*100, "%", "\n")
+cat("Average recall: ", avg_recall*100, "%", "\n")
+cat("Average specificity: ", avg_specificity*100, "%", "\n")
+cat("Average precision: ", avg_precision*100, "%", "\n")
+cat("Average false positive rate:", avg_fpr*100, "%", "\n")
+cat("Average false negative rate:", avg_fnr*100, "%", "\n")
+
+#save average performance values to a list for comparison
+logit_avg_step <- list(average_accuracy = avg_accuracy, 
+                                average_error = avg_error, 
+                                average_recall = avg_recall, 
+                                average_specificity = avg_specificity, 
+                                average_precision = avg_precision, 
+                                average_fpr = avg_fpr, 
+                                average_fnr = avg_fnr)
+```
+
+### Conclusion
+
+```{r}
+data.frame(
+  Model=c("Full Logistic", "Forward", "Backward", "Stepwise"),
+  Accuracy=c(logit_avg_perf$average_accuracy, 
+             logit_avg_for$average_accuracy,
+             logit_avg_back$average_accuracy, 
+             logit_avg_step$average_accuracy),
+  Error_rate=c(logit_avg_perf$average_error, 
+               logit_avg_for$average_error,
+               logit_avg_back$average_error, 
+               logit_avg_step$average_error),
+  Recall=c(logit_avg_perf$average_recall, 
+           logit_avg_for$average_recall,
+           logit_avg_back$average_recall, 
+           logit_avg_step$average_recall),
+  Specificity=c(logit_avg_perf$average_specificity, 
+                logit_avg_for$average_specificity,
+                logit_avg_back$average_specificity, 
+                logit_avg_step$average_specificity),
+  Precision=c(logit_avg_perf$average_precision, 
+              logit_avg_for$average_precision,
+              logit_avg_back$average_precision, 
+              logit_avg_step$average_precision),
+  False_Positive_Rate=c(logit_avg_perf$average_fpr, 
+                        logit_avg_for$average_fpr,
+                        logit_avg_back$average_fpr, 
+                        logit_avg_step$average_fpr),
+  False_Negative_Rate=c(logit_avg_perf$average_fnr, 
+                        logit_avg_for$average_fnr,
+                        logit_avg_back$average_fnr, 
+                        logit_avg_step$average_fnr)
+)
+```
+
+* Based on the table above, we can see that backward and stepwise logistic regression are interchangeable in terms of the performance metrics that provide insights into the models' behavior. Hence, in the final analysis, backward and stepwise selection are a better model than full logistic and forward selection in order to describe cookies dataset in which we are desire to explain if the fat is higher than the median value of all the fat indicators given the previous computed features.
+
+## Logistic regression model using the spectra
+
+* In this section we will study the l1 and l2 penalized logistic regression in which it involves adding a penalty term to the logistic regression objective function to prevent overfitting in order to explain the low or high values of the fat given the spectra since a full logistic will have a 100% accuracy.
+
+* First we bind the $YBin$ obtained from above, then remove the response variable $fat$ from the data frame since we want to predict the binary target variable.
+
+```{r}
+spectra_data <- cbind(YBin, df)
+spectra_data <- subset(spectra_data, select = -fat)
+X_spec <- subset(spectra_data, select = -YBin)
+Y_spec <- spectra_data$YBin
+```
+
+### Penalized Logistic Regression: Ridge
+
+* First, we perform a cross-validation using $cv.glmnet()$ to find the best tuning parameter $\lambda$.
+
+```{r}
+cv_ridge <- cv.glmnet(as.matrix(X_spec), Y_spec, alpha = 0, family = "binomial")
+plot(cv_ridge)
+```
+
+* The plot displays the cross-validation error according to the log of lambda. The steady vertical line indicates that the log of the optimal value of lambda is approximately 3, which is the one that minimizes the prediction error. This lambda value will give the most accurate model. The exact value of lambda can be viewed as follow:
+
+```{r}
+cv_ridge$lambda.min
+```
+
+* The function $cv.glmnet()$ finds also the value of lambda that gives the simplest model but also lies within one standard error of the optimal value of lambda. It is is called lambda.1se.
+
+```{r}
+cv_ridge$lambda.1se
+```
+
+* We now fit the final ridge model by using 2 different lambda values from above, min and 1se.
+
+#### Estimation step
+
+* Here, family is the response type, so “binomial” for a binary outcome variable, and alpha is the elastic net mixing parameter where “1”: for lasso regression, and “0”: for ridge regression.
+
+```{r}
+ridgeMin <- glmnet(as.matrix(X_spec), Y_spec, alpha = 0, 
+                   family = "binomial", lambda = cv_ridge$lambda.min)
+ridge1se <- glmnet(as.matrix(X_spec), Y_spec, alpha = 0, 
+                   family = "binomial", lambda = cv_ridge$lambda.1se)
+```
+
+#### Prediction step
+
+* Find probabilities for both model which using $\lambda_{min}$, and  $\lambda_{1se}$.
+
+```{r}
+probs_ridgeMin <- predict(ridgeMin, s = cv_ridge$lambda.min, 
+                          newx = as.matrix(X_spec), type = "response")
+probs_ridge1se <- predict(ridge1se, s = cv_ridge$lambda.1se, 
+                          newx = as.matrix(X_spec), type = "response")
+```
+
+#### Decision step
+
+* Make decision for both model based on probabilities obtained.
+
+```{r}
+Y_hat_ridgeMin <- ifelse(probs_ridgeMin > MAP_threshold, 1, 0)
+Y_hat_ridge1se <- ifelse(probs_ridge1se > MAP_threshold, 1, 0)
+```
+
+#### Model performance
+
+* Here we find which one is better by finding their error.
+
+```{r}
+MSE(spectra_data$YBin, Y_hat_ridgeMin)
+MSE(spectra_data$YBin, Y_hat_ridge1se)
+```
+
+* Setting $\lambda = \lambda_{1se}$ produces a simpler model compared to $\lambda_{min}$, nevertheless, the model might be a little bit less accurate than the one obtained with $\lambda_{min}$ since its error is smaller.
+
+#### K-fold cross validation for l2 penalized logistic regression: Ridge
+
+* Now we perform k-fold cross validation for l2 penalized logistic regression by choosing $\lambda_{min}$ as the best lambda.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(spectra_data))
+
+#assign a new tab equal to random order of spectra
+tab = spectra_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(spectra_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_MSE = 0
+total_accu = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test  
+  X_train = subset(tabTrain, select = -YBin)
+  Y_train = tabTrain$YBin
+  X_test = subset(tabTest, select = -YBin)
+  Y_test = tabTest$YBin
+  
+  #perform cross-validation to find best lambda
+  cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial", grouped=FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 0, 
+                    family = "binomial", lambda = cv_ridge$lambda.min)
+  
+  #find probability and make decision for this model (prediction and decision step)
+  probs = predict(modTrain, s = cv_ridge$lambda.min, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > MAP_threshold, 1, 0)
+  
+  #find error and accuracy
+  mse = MSE(Y_test, Y_hat)
+  accu = mean(Y_test == Y_hat)
+  
+  #sum up each fold to find total error and accuracy
+  total_MSE = total_MSE + mse
+  total_accu = total_accu + accu
+  
+  #display performance
+  cat("Lambda selected for Fold", i, ":", cv_ridge$lambda.min, "\n")
+  cat("MSE for Fold", i, ":", mse, "\n")
+  cat("Accuracy for Fold", i, ":", accu, "\n\n")
+}
+
+#find average performance for this model
+avg_mse = total_MSE/k
+avg_accu = total_accu/k
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+#display the average performance
+cat("Average MSE: ", avg_mse, "\n")
+cat("Average accuracy: ", avg_accu, "\n")
+
+ridge_min_perf <- list(MSE = avg_mse, accuracy = avg_accu)
+```
+
+* By performing the k-fold cross validation the error is slightly went up, and it is logical since each time it tested on the unseen data.
+
+* Now we perform k-fold cross validation for l2 penalized logistic regression by choosing $\lambda_{1se}$ as the best lambda.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(spectra_data))
+
+#assign a new tab equal to random order of spectra
+tab = spectra_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(spectra_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_MSE = 0
+total_accu = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test  
+  X_train = subset(tabTrain, select = -YBin)
+  Y_train = tabTrain$YBin
+  X_test = subset(tabTest, select = -YBin)
+  Y_test = tabTest$YBin
+  
+  #perform cross-validation to find best lambda
+  cv_ridge <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 0, family = "binomial", grouped=FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 0, 
+                    family = "binomial", lambda = cv_ridge$lambda.1se)
+  
+  #find probability and make decision for this model (prediction and decision step)
+  probs = predict(modTrain, s = cv_ridge$lambda.1se, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > MAP_threshold, 1, 0)
+  
+  #find error and accuracy
+  mse = MSE(Y_test, Y_hat)
+  accu = mean(Y_test == Y_hat)
+  
+  #sum up each fold to find total error and accuracy
+  total_MSE = total_MSE + mse
+  total_accu = total_accu + accu
+  
+  #display performance
+  cat("Lambda selected for Fold", i, ":", cv_ridge$lambda.1se, "\n")
+  cat("MSE for Fold", i, ":", mse, "\n")
+  cat("Accuracy for Fold", i, ":", accu, "\n\n")
+}
+
+#find average performance for this model
+avg_mse = total_MSE/k
+avg_accu = total_accu/k
+
+#print end fold
+cat("======= End Fold =======\n\n")
+
+#display the average performance
+cat("Average MSE: ", avg_mse, "\n")
+cat("Average accuracy: ", avg_accu, "\n")
+
+ridge_1se_perf <- list(MSE = avg_mse, accuracy = avg_accu)
+```
+
+### Penalized Logistic Regression: Lasso
+
+* We follow the same procedure as before (Ridge), by just changing $\alpha = 0$ to $\alpha = 1$.
+
+```{r}
+cv_lasso <- cv.glmnet(as.matrix(X_spec), Y_spec, alpha = 1, family = "binomial")
+plot(cv_lasso)
+```
+
+* In the same way, the plot displays the cross-validation error according to the log of lambda. We will see its exact value below.
+
+```{r}
+cv_lasso$lambda.min
+cv_lasso$lambda.1se
+```
+
+#### Estimation step
+
+* Lasso regression is effective for variable selection by setting some coefficients to exactly zero, as for Ridge, it only tries to keep all coefficients relatively small. We now see the remaining variables.
+
+```{r}
+lassoMin <- glmnet(as.matrix(X_spec), Y_spec, alpha = 1, 
+                   family = "binomial", lambda = cv_lasso$lambda.min)
+
+lasso1se <- glmnet(as.matrix(X_spec), Y_spec, alpha = 1, 
+                   family = "binomial", lambda = cv_lasso$lambda.1se)
+```
+
+```{r}
+lassoMin_remain <- rownames(coef(lassoMin))[which(coef(lassoMin)[, "s0"] != 0)]
+lassoMin_remain
+```
+
+* These are the values correspond to the coefficients labeled above.
+
+```{r}
+lassoMin_coef <- as.numeric(coef(lassoMin)) #set as numeric values
+lassoMin_coef <- lassoMin_coef[lassoMin_coef != 0] #see how many variables were selected
+lassoMin_coef
+```
+
+#### Prediction step
+
+* Now we find the probability for $\lambda_{min}$, and $\lambda_{1se}$ model
+
+```{r}
+probs_lassoMin <- predict(lassoMin, s = cv_lasso$lambda.min, 
+                          type = "response", newx = as.matrix(X_spec))
+probs_lasso1se <- predict(lasso1se, s = cv_lasso$lambda.1se,
+                          type = "response", newx = as.matrix(X_spec))
+```
+
+#### Decision step
+
+* Then, we make a decision based on the probability obtained
+
+```{r}
+Y_hat_lassoMin <- ifelse(probs_lassoMin > MAP_threshold, 1, 0)
+Y_hat_lasso1se <- ifelse(probs_lasso1se > MAP_threshold, 1, 0)
+```
+
+#### Model performance
+
+* Lastly, we find the error for each model to see which one is better.
+
+```{r}
+MSE(Y_spec, Y_hat_lassoMin)
+MSE(Y_spec, Y_hat_lasso1se)
+```
+
+Here, again, the $\lambda_{min}$ is more accurate then the $\lambda_{1se}$ one, hence, we will perform k-fold only with the $\lambda_{min}$.
+
+#### K-fold cross validation for l1 penalized logistic regression: Lasso
+
+
+* Now we perform k-fold cross validation for l1 penalized logistic regression using $\lambda_{min}$ as the best lambda.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(spectra_data))
+
+#assign a new tab equal to random order of spectra
+tab = spectra_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(spectra_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_MSE = 0
+total_accu = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test
+  X_train = subset(tabTrain, select = -YBin)
+  Y_train = tabTrain$YBin
+  X_test = subset(tabTest, select = -YBin)
+  Y_test = tabTest$YBin
+  
+  #perform cross-validation to find best lambda
+  cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial", grouped = FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 1, 
+                    family = "binomial", lambda = cv_lasso$lambda.min)
+  
+  #find error and accuracy
+  probs = predict(modTrain, s = cv_lasso$lambda.min, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > MAP_threshold, 1, 0)
+  
+  #calculate error and accuracy for each fold
+  mse = MSE(Y_test, Y_hat)
+  accu = mean(Y_test == Y_hat)
+  
+  #sum up each fold to find total error and accuracy
+  total_MSE = total_MSE + mse
+  total_accu = total_accu + accu
+  
+  #print lambda selected, mse, accuracy for each fold
+  cat("Lambda selected for Fold", i, ":", cv_lasso$lambda.min, "\n")
+  cat("MSE for Fold", i, ":", mse, "\n")
+  cat("Accuracy for Fold", i, ":", accu, "\n\n")
+}
+
+#calculate the average performance
+avg_mse = total_MSE/k
+avg_accu = total_accu/k
+
+#print performance
+cat("======= End Fold =======\n\n")
+cat("Average MSE: ", avg_mse, "\n")
+cat("Average accuracy: ", avg_accu, "\n")
+
+lasso_min_perf <- list(MSE = avg_mse, accuracy = avg_accu)
+```
+
+
+* Now we perform k-fold cross validation for l1 penalized logistic regression using $\lambda_{1se}$ as the best lambda.
+
+```{r}
+#set index to number of observations we have then sample it to have random order
+ind = sample(nrow(spectra_data))
+
+#assign a new tab equal to random order of spectra
+tab = spectra_data[ind,]
+
+#initialize number of fold
+k = 5
+
+#num of obs in order to find each block
+n = nrow(spectra_data)
+
+#divide into block based on obs-n and number of folds k
+l_bloc = trunc(n/k)
+
+#initlialize the total of model performance
+total_MSE = 0
+total_accu = 0
+
+#k-fold procedure
+for (i in 1:k){
+  #print order of fold
+  cat("======= Fold", i, "========", "\n\n")
+  
+  #initialize index for i-fold, for example: i=1,n=32,k=5 will give index of 1-6
+  ind_i = ((i-1)*l_bloc + 1) : (i*l_bloc)
+  
+  #initialize data for test and train
+  tabTrain = tab[-ind_i,]
+  tabTest = tab[ind_i,]
+  
+  #initialize predictor and response variable for train, test
+  X_train = subset(tabTrain, select = -YBin)
+  Y_train = tabTrain$YBin
+  X_test = subset(tabTest, select = -YBin)
+  Y_test = tabTest$YBin
+  
+  #perform cross-validation to find best lambda
+  cv_lasso <- cv.glmnet(as.matrix(X_train), Y_train, alpha = 1, family = "binomial", grouped = FALSE)
+  
+  #train penalized ridge model using best lambda obtained from cv
+  modTrain = glmnet(as.matrix(X_train), Y_train, alpha = 1, 
+                    family = "binomial", lambda = cv_lasso$lambda.1se)
+  
+  #find error and accuracy
+  probs = predict(modTrain, s = cv_lasso$lambda.1se, newx = as.matrix(X_test), 
+                  type = "response")
+  Y_hat = ifelse(probs > MAP_threshold, 1, 0)
+  
+  #calculate error and accuracy for each fold
+  mse = MSE(Y_test, Y_hat)
+  accu = mean(Y_test == Y_hat)
+  
+  #sum up each fold to find total error and accuracy
+  total_MSE = total_MSE + mse
+  total_accu = total_accu + accu
+  
+  #print lambda selected, mse, accuracy for each fold
+  cat("Lambda selected for Fold", i, ":", cv_lasso$lambda.1se, "\n")
+  cat("MSE for Fold", i, ":", mse, "\n")
+  cat("Accuracy for Fold", i, ":", accu, "\n\n")
+}
+
+#calculate the average performance
+avg_mse = total_MSE/k
+avg_accu = total_accu/k
+
+#print performance
+cat("======= End Fold =======\n\n")
+cat("Average MSE: ", avg_mse, "\n")
+cat("Average accuracy: ", avg_accu, "\n")
+
+lasso_1se_perf <- list(MSE = avg_mse, accuracy = avg_accu)
+```
+
+### Conclusion
+
+```{r}
+data.frame(
+  Model= c("Ridge Min", "Ridge 1se", "Lasso Min", "Lasso 1se"),
+  MSE = c(ridge_min_perf$MSE, ridge_1se_perf$MSE, 
+          lasso_min_perf$MSE, lasso_1se_perf$MSE),
+  Accuracy = c(ridge_min_perf$accuracy, ridge_1se_perf$accuracy, 
+               lasso_min_perf$accuracy, lasso_1se_perf$accuracy)
+  )
+```
+
+* In the final analysis, not only Lasso provides a simpler model than Ridge since it eliminates certain variables from the model, but visibly, the table above also suggests that, the $l_{1}$ penalized regression with the chosen $\lambda{min}$ has a better prediction than Ridge; therefore, it is the best model to explain the low or high values of the fat given the spectra.
